@@ -55,7 +55,7 @@ select a folder, and let the agent work there.
 
 ```bash
 # straight from GitHub
-dsh plugin --profile web add github:<you>/dsh-remote-workstation
+dsh plugin --profile web add github:MingTXin/dsh-remote-workstation
 
 # from npm (once published)
 dsh plugin --profile web add dsh-remote-workstation
