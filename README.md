@@ -44,6 +44,12 @@ select a folder, and let the agent work there.
   the plugin host store (`0600`) or the DSH SSH store on every connection and never leave the host
   process.
 - **Nothing to install on the server** — plain SFTP, no agent or helper binary.
+- **Remote writes and edits** — `write` and `edit` tools work on remote files through the same
+  `ctx.fs` contract as local ones: create-if-absent, version-checked replace (stale writes are
+  rejected), literal `editText` with ambiguity detection, and the sandbox fence still applies.
+- **Remote shell and search tools** — `remote_exec` runs a command on the mounted server (builds,
+  tests, `git`, anything), `remote_search` greps a remote directory and returns `path:line` hits,
+  so agents do not have to fall back to host-local `glob`/`grep`.
 
 ## Requirements
 
@@ -132,7 +138,7 @@ The plugin is mounted through a bundle patch (`cordis.patch.yml`), so options li
         sshHostsPath: ~/.dsh/dsh-ssh.json                 # secondary host source
         hostsPath: ~/.dsh/remote-workspaces-hosts.json    # plugin-owned host store
         anchorRoot: ~/.dsh/remote-workspaces              # where anchors are created
-        remoteReadOnly: true                              # stage 1: read-only
+        remoteReadOnly: false                             # true = reject every remote mutation
         connectTimeoutMs: 15000
         maxReadTextBytes: 33554432
 ```
@@ -143,13 +149,31 @@ The plugin is mounted through a bundle patch (`cordis.patch.yml`), so options li
 | `hostsPath` | `~/.dsh/remote-workspaces-hosts.json` | plugin-owned hosts (credentials, `0600`) |
 | `sshHostsPath` | `~/.dsh/dsh-ssh.json` | fallback host source |
 | `anchorRoot` | `~/.dsh/remote-workspaces` | anchor directory root |
-| `remoteReadOnly` | `true` | reject remote writes |
+| `remoteReadOnly` | `false` | set to `true` to reject every remote mutation |
+| `enableTools` | `true` | register the `remote_exec` / `remote_search` tools |
 | `connectTimeoutMs` | `15000` | SSH connect timeout |
 | `maxReadTextBytes` | 32 MiB | single `readText` ceiling |
 | `mounts` | `[]` | static mounts (`{host, remote, anchor?}`), not persisted |
 
 `fs-sandbox` has to be disabled: a composition may mount only one `ctx.fs` provider, and this
 plugin's provider already inherits the sandboxed implementation.
+
+## Remote tools
+
+With `enableTools: true` (the default) the plugin registers two tools next to the filesystem:
+
+| Tool | Arguments | What it does |
+| --- | --- | --- |
+| `remote_exec` | `host`, `command`, `cwd?`, `timeoutMs?` | Runs a shell command on the server through an SSH exec channel and returns `{ exitCode, stdout, stderr, durationMs }`. Use it for builds, tests, `git`, `ls`, anything the anchor session cannot run locally. |
+| `remote_search` | `host`, `path`, `pattern`, `glob?`, `ignoreCase?`, `maxResults?` | Recursive `grep -rInE` on the server (`.git` excluded), returning `path:line: text` hits plus a `truncated` flag. |
+
+```text
+remote_exec(host="my-server", command="npm test", cwd="/srv/app")
+remote_search(host="my-server", path="/srv/app/src", pattern="TODO", glob="*.ts")
+```
+
+Both tools take the same host alias the panel uses, so a mounted workspace and a remote shell share
+one host store and one connection pool.
 
 ## Security notes
 
@@ -158,8 +182,10 @@ plugin's provider already inherits the sandboxed implementation.
   matters, or keep using `dsh-ssh.json`.
 - **The plugin takes over `ctx.fs` for the whole profile** it is installed into. Sessions that never
   touch anchors behave exactly as before (local backend), but the swap is profile-wide.
-- **Read-only by default** (`remoteReadOnly: true`): remote writes fail with
-  `remote workspaces are read-only in this build` until stage 2 lands.
+- **Writes stay fenced.** Remote `writeText`/`editText` run through the same sandbox check as local
+  writes: `read-only` denies, `workspace-write` allows only the anchor subtree (plus `/tmp` and the
+  host temp directory), `danger-full-access` allows everything. Set `remoteReadOnly: true` to refuse
+  every remote mutation regardless of the session mode.
 - Credentials never cross the HTTP API: the panel only receives `alias/host/port/user/source`.
 
 ## Known limitations
@@ -170,13 +196,13 @@ plugin's provider already inherits the sandboxed implementation.
   `docs/subsystems/ssh.md` notes that web workspace views which assume host filesystem access need
   separate integration).
 - Built-in `glob` / `grep` run the host ripgrep binary, so they see the empty anchor directory rather
-  than remote files. Use SSH-exec style tools for remote searching until `remote_search` lands.
+  than remote files. Use `remote_search` (or `remote_exec` with `rg`/`find`) instead.
 - SFTP `mtime` has one-second resolution; the version token combines device, inode, size and mtime.
 
 ## Roadmap
 
-- **Stage 2** — remote `writeText` / `editText` with version checks (atomic SFTP writes),
-  `remote_search` tool, reuse of remote shells for builds.
+- ~~**Stage 2** — remote `writeText` / `editText` with version checks, `remote_search`, remote shells
+  for builds.~~ Shipped in 0.3.0 (`remote_exec`, `remote_search`, version-guarded writes).
 - **Stage 3** — polling-based remote `watch`, git integration, image/binary previews.
 - Optional: consume the upstream `packages/ssh` family (`@deepseek-ai/dsh-fs-ssh`) instead of the
   custom union provider, once web workspace views become provider-driven.

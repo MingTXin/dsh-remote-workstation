@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote-workstation",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Mount remote SSH/SFTP directories into DeepSeek Harness workspaces: anchor workspaces, a remote filesystem provider for ctx.fs, and a Remote Explorer sidebar panel",
   "license": "MIT",
   "type": "module",
@@ -44,7 +44,7 @@
     "node": "^22.19.0 || >=24.0.0"
   },
   "scripts": {
-    "test": "node --test --test-force-exit test/paths.test.mjs test/mounts.test.mjs test/fs-remote.test.mjs test/explorer.test.mjs",
+    "test": "node --test --test-force-exit test/paths.test.mjs test/mounts.test.mjs test/explorer.test.mjs test/tools.test.mjs test/fs-remote.test.mjs",
     "probe": "node scripts/probe.mjs"
   },
   "dependencies": {
@@ -56,7 +56,8 @@
     "@deepseek-ai/dsh-fs-local": "*",
     "@deepseek-ai/dsh-fs-sandbox": "*",
     "@deepseek-ai/schemastery": "*",
-    "react": "^18.2.0"
+    "react": "^18.2.0",
+    "@deepseek-ai/dsh-tools": "^0.2.1-rc.2"
   },
   "dsh": {
     "engines": {

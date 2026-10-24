@@ -1,4 +1,4 @@
-﻿/**
+/**
  * End-to-end test of the provider through a real Cordis context.
  *
  * Requires a reachable SSH host: set DSH_RW_REMOTE_HOST to a host alias from
@@ -20,14 +20,35 @@ import path from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
 import { RemoteWorkspaceFileSystem } from '../lib/index.js'
+import * as sftpOps from '../lib/ssh/sftp.js'
 
 const HOST = process.env.DSH_RW_REMOTE_HOST
 const REMOTE = process.env.DSH_RW_REMOTE_DIR ?? '/tmp/dsh-remote-workspace-fixture'
 const SSH_STORE = path.join(os.homedir(), '.dsh', 'dsh-ssh.json')
 const skip = HOST ? false : 'set DSH_RW_REMOTE_HOST to run the SSH-backed tests'
 
-test('ctx.fs serves a mounted remote directory read-only', { skip }, async () => {
+/** Delete the scratch files through the provider's pooled connection. */
+async function removeScratch(fs, ...names) {
+  try {
+    await fs.remoteState.pool.withSftp(HOST, async (session) => {
+      for (const name of names) {
+        try {
+          await sftpOps.unlink(session, `${REMOTE}/${name}`)
+        } catch {
+          /* already gone */
+        }
+      }
+    })
+  } catch {
+    /* the remote is unreachable: leave the scratch files for the next run */
+  }
+}
+
+test('ctx.fs serves a mounted remote directory the way the local backend does', { skip }, async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'rw-remote-'))
+  const suffix = `${process.pid}-${Date.now()}`
+  const scratchCreated = `scratch-created-${suffix}.txt`
+  const scratchMulti = `scratch-multi-${suffix}.txt`
   const ctx = new Context()
   ctx.reflect.provide('sandboxPolicy', {
     defaultMode: 'danger-full-access',
@@ -101,15 +122,47 @@ test('ctx.fs serves a mounted remote directory read-only', { skip }, async () =>
 
     await assert.rejects(fs.listDir(hello), (error) => error.code === 'FS_NOT_DIRECTORY' && /not a directory/.test(error.message))
 
-    // --- read-only gate ----------------------------------------------------
+    // --- writes: create / update / intent guards ---------------------------
+    const createdTarget = await fs.resolve(path.join(mount.anchor, scratchCreated))
+    const createOne = await fs.writeText(createdTarget, 'first line\n', { kind: 'createIfAbsent' })
+    assert.equal(createOne.operation, 'create')
+    assert.equal(await fs.readText(createdTarget), 'first line\n')
     await assert.rejects(
-      fs.writeText(hello, 'nope'),
-      (error) => error.code === 'FS_SANDBOX_DENIED' && /read-only in this build/.test(error.message),
+      fs.writeText(createdTarget, 'nope\n', { kind: 'createIfAbsent' }),
+      (error) => error.code === 'FS_NOT_OBSERVED' && /without reading it first/.test(error.message),
     )
+
+    const replaced = await fs.writeText(hello, 'hello from the remote host\nsecond line\n', { kind: 'replaceIfVersion', version: info.version })
+    assert.equal(replaced.operation, 'update')
     await assert.rejects(
-      fs.editText(hello, { oldString: 'hello', newString: 'bye' }),
-      (error) => error.code === 'FS_SANDBOX_DENIED' && /read-only in this build/.test(error.message),
+      fs.writeText(hello, 'stale\n', { kind: 'replaceIfVersion', version: info.version }),
+      (error) => error.code === 'FS_STALE_VERSION' && /changed since it was read/.test(error.message),
     )
+
+    // --- edits: literal, ambiguous, all, not-found -------------------------
+    const editBase = await fs.stat(hello)
+    const edited = await fs.editText(hello, { oldString: 'second line', newString: 'second line, edited' }, { version: editBase.version })
+    assert.equal(edited.after, 'hello from the remote host\nsecond line, edited\n')
+    assert.equal(await fs.readText(hello), 'hello from the remote host\nsecond line, edited\n')
+    await assert.rejects(
+      fs.editText(hello, { oldString: 'not there', newString: 'x' }, { version: edited.version }),
+      (error) => error.code === 'FS_EDIT_NOT_FOUND',
+    )
+
+    const multiTarget = await fs.resolve(path.join(mount.anchor, scratchMulti))
+    await fs.writeText(multiTarget, 'a\na\na\n')
+    const multiInfo = await fs.stat(multiTarget)
+    await assert.rejects(
+      fs.editText(multiTarget, { oldString: 'a', newString: 'b' }, { version: multiInfo.version }),
+      (error) => error.code === 'FS_AMBIGUOUS_EDIT',
+    )
+    const allEdited = await fs.editText(multiTarget, { oldString: 'a', newString: 'b', replaceAll: true }, { version: multiInfo.version })
+    assert.equal(allEdited.after, 'b\nb\nb\n')
+
+    // put the fixture back the way it was
+    const restoreBase = await fs.stat(hello)
+    await fs.editText(hello, { oldString: 'second line, edited', newString: 'second line' }, { version: restoreBase.version })
+    assert.equal(await fs.readText(hello), 'hello from the remote host\nsecond line\n')
 
     // --- namespace helpers -------------------------------------------------
     const processed = fs.processPath(hello)
@@ -134,6 +187,41 @@ test('ctx.fs serves a mounted remote directory read-only', { skip }, async () =>
     // --- unmounts ----------------------------------------------------------
     assert.equal(await fs.removeMount(mount.id), true)
     assert.equal((await fs.listMounts()).length, 0)
+
+    // --- remote scratch files back out ------------------------------------
+    await removeScratch(fs, scratchCreated, scratchMulti)
+  } finally {
+    await ctx.fiber.dispose()
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('remoteReadOnly: true still fences every remote mutation', { skip }, async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'rw-remote-ro-'))
+  const ctx = new Context()
+  ctx.reflect.provide('sandboxPolicy', {
+    defaultMode: 'danger-full-access',
+    resolve: () => ({ mode: 'danger-full-access', writableRoots: [dir] }),
+  })
+  try {
+    await ctx.plugin(RemoteWorkspaceFileSystem, {
+      storePath: path.join(dir, 'store.json'),
+      sshHostsPath: SSH_STORE,
+      anchorRoot: path.join(dir, 'anchors'),
+      connectTimeoutMs: 20000,
+      remoteReadOnly: true,
+    })
+    const fs = ctx.fs
+    const mount = await fs.addMount(HOST, REMOTE)
+    const hello = await fs.resolve(path.join(mount.anchor, 'hello.txt'))
+    await assert.rejects(
+      fs.writeText(hello, 'nope'),
+      (error) => error.code === 'FS_SANDBOX_DENIED' && /read-only in this build/.test(error.message),
+    )
+    await assert.rejects(
+      fs.editText(hello, { oldString: 'hello', newString: 'bye' }),
+      (error) => error.code === 'FS_SANDBOX_DENIED' && /read-only in this build/.test(error.message),
+    )
   } finally {
     await ctx.fiber.dispose()
     await rm(dir, { recursive: true, force: true })

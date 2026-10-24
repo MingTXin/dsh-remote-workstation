@@ -7,5 +7,5 @@
         storePath: ~/.dsh/remote-workspaces.json
         hostsPath: ~/.dsh/remote-workspaces-hosts.json
         sshHostsPath: ~/.dsh/dsh-ssh.json
-        remoteReadOnly: true
+        remoteReadOnly: false
         connectTimeoutMs: 15000
