@@ -1,0 +1,11 @@
+- id: fs-sandbox
+  disabled: true
+- insert:
+    - id: remote-workspace
+      name: dsh-remote-workstation
+      config:
+        storePath: ~/.dsh/remote-workspaces.json
+        hostsPath: ~/.dsh/remote-workspaces-hosts.json
+        sshHostsPath: ~/.dsh/dsh-ssh.json
+        remoteReadOnly: true
+        connectTimeoutMs: 15000

@@ -1,0 +1,21 @@
+node_modules/
+tests-out/
+test-out.txt
+
+# local run artifacts
+*.log
+.rwtest*
+.served-client.js
+tmp/
+dist/
+
+# never commit host inventories or credentials
+.dsh/
+remote-workspaces*.json
+dsh-ssh.json
+*.pem
+*.key
+
+# OS noise
+.DS_Store
+Thumbs.db
