@@ -50,6 +50,12 @@ select a folder, and let the agent work there.
 - **Remote shell and search tools** — `remote_exec` runs a command on the mounted server (builds,
   tests, `git`, anything), `remote_search` greps a remote directory and returns `path:line` hits,
   so agents do not have to fall back to host-local `glob`/`grep`.
+- **Live refresh over SFTP** — remote `watch` is implemented by polling file attributes (2 s
+  default), so the Files tab and open previews pick up external changes without a server agent.
+- **Git over SSH** — `remote_git` runs a read-only git query (`status`, `diff`, `log`, `show`,
+  `branch`, `rev-parse`, `ls-files`, `blame`, `stash`) inside a remote repository.
+- **Binary and image previews** — `readByteRange`/`readBytes` are real SFTP reads, so the built-in
+  image/PDF/Excel/Office previews render remote files without downloading them first.
 
 ## Requirements
 
@@ -139,6 +145,7 @@ The plugin is mounted through a bundle patch (`cordis.patch.yml`), so options li
         hostsPath: ~/.dsh/remote-workspaces-hosts.json    # plugin-owned host store
         anchorRoot: ~/.dsh/remote-workspaces              # where anchors are created
         remoteReadOnly: false                             # true = reject every remote mutation
+        watchIntervalMs: 2000                             # remote watch() polling interval
         connectTimeoutMs: 15000
         maxReadTextBytes: 33554432
 ```
@@ -150,7 +157,8 @@ The plugin is mounted through a bundle patch (`cordis.patch.yml`), so options li
 | `sshHostsPath` | `~/.dsh/dsh-ssh.json` | fallback host source |
 | `anchorRoot` | `~/.dsh/remote-workspaces` | anchor directory root |
 | `remoteReadOnly` | `false` | set to `true` to reject every remote mutation |
-| `enableTools` | `true` | register the `remote_exec` / `remote_search` tools |
+| `enableTools` | `true` | register the `remote_exec` / `remote_search` / `remote_git` tools |
+| `watchIntervalMs` | `2000` | remote `watch()` polling interval (minimum 250) |
 | `connectTimeoutMs` | `15000` | SSH connect timeout |
 | `maxReadTextBytes` | 32 MiB | single `readText` ceiling |
 | `mounts` | `[]` | static mounts (`{host, remote, anchor?}`), not persisted |
@@ -160,16 +168,18 @@ plugin's provider already inherits the sandboxed implementation.
 
 ## Remote tools
 
-With `enableTools: true` (the default) the plugin registers two tools next to the filesystem:
+With `enableTools: true` (the default) the plugin registers three tools next to the filesystem:
 
 | Tool | Arguments | What it does |
 | --- | --- | --- |
 | `remote_exec` | `host`, `command`, `cwd?`, `timeoutMs?` | Runs a shell command on the server through an SSH exec channel and returns `{ exitCode, stdout, stderr, durationMs }`. Use it for builds, tests, `git`, `ls`, anything the anchor session cannot run locally. |
 | `remote_search` | `host`, `path`, `pattern`, `glob?`, `ignoreCase?`, `maxResults?` | Recursive `grep -rInE` on the server (`.git` excluded), returning `path:line: text` hits plus a `truncated` flag. |
+| `remote_git` | `host`, `path`, `command`, `args?` | One read-only git query (`status`, `diff`, `log`, `show`, `branch`, `rev-parse`, `ls-files`, `blame`, `stash`) inside a remote repository. Other subcommands are rejected. |
 
 ```text
 remote_exec(host="my-server", command="npm test", cwd="/srv/app")
 remote_search(host="my-server", path="/srv/app/src", pattern="TODO", glob="*.ts")
+remote_git(host="my-server", path="/srv/app", command="diff", args=["--stat"])
 ```
 
 Both tools take the same host alias the panel uses, so a mounted workspace and a remote shell share
@@ -190,20 +200,26 @@ one host store and one connection pool.
 
 ## Known limitations
 
-- **No remote `watch`** — the Files tab does not auto-refresh for anchor workspaces
-  (`workspace-file/watch-unsupported`); collapse/expand the folder or reopen the file.
+- **Refresh is polled, not pushed** — SFTP has no change feed, so remote `watch` re-reads file
+  attributes every `watchIntervalMs` (2 s default). A change shows up one interval later; the cost is
+  one `stat` per watched path per interval, not a full directory walk. A file's own edits (from any
+  client) are detected by size/mtime; a directory watch notices entries added or removed, while
+  in-place content edits of a file you never opened are only noticed once it is opened or written
+  through DSH.
 - `@`-file mentions and turn diffs still use host-local paths (upstream boundary: DSH's
   `docs/subsystems/ssh.md` notes that web workspace views which assume host filesystem access need
-  separate integration).
+  separate integration). Use `remote_git` / `remote_exec` to inspect the real repository.
 - Built-in `glob` / `grep` run the host ripgrep binary, so they see the empty anchor directory rather
   than remote files. Use `remote_search` (or `remote_exec` with `rg`/`find`) instead.
-- SFTP `mtime` has one-second resolution; the version token combines device, inode, size and mtime.
+- SFTP `mtime` has one-second resolution; the version token combines device, inode, size and mtime,
+  so a rewrite that keeps size and mtime within the same second is not distinguishable.
 
 ## Roadmap
 
 - ~~**Stage 2** — remote `writeText` / `editText` with version checks, `remote_search`, remote shells
   for builds.~~ Shipped in 0.3.0 (`remote_exec`, `remote_search`, version-guarded writes).
-- **Stage 3** — polling-based remote `watch`, git integration, image/binary previews.
+- ~~**Stage 3** — polling-based remote `watch`, git integration, image/binary previews.~~ Shipped in
+  0.4.0 (`watchIntervalMs`, `remote_git`, byte-range previews).
 - Optional: consume the upstream `packages/ssh` family (`@deepseek-ai/dsh-fs-ssh`) instead of the
   custom union provider, once web workspace views become provider-driven.
 

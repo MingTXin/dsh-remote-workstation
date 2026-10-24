@@ -49,6 +49,7 @@ test('ctx.fs serves a mounted remote directory the way the local backend does', 
   const suffix = `${process.pid}-${Date.now()}`
   const scratchCreated = `scratch-created-${suffix}.txt`
   const scratchMulti = `scratch-multi-${suffix}.txt`
+  const scratchWatch = `scratch-watch-${suffix}.txt`
   const ctx = new Context()
   ctx.reflect.provide('sandboxPolicy', {
     defaultMode: 'danger-full-access',
@@ -60,6 +61,7 @@ test('ctx.fs serves a mounted remote directory the way the local backend does', 
       sshHostsPath: SSH_STORE,
       anchorRoot: path.join(dir, 'anchors'),
       connectTimeoutMs: 20000,
+      watchIntervalMs: 300,
     })
     const fs = ctx.fs
     assert.ok(fs, 'the provider registers ctx.fs')
@@ -121,6 +123,35 @@ test('ctx.fs serves a mounted remote directory the way the local backend does', 
     assert.equal(await fs.stat(missing), undefined)
 
     await assert.rejects(fs.listDir(hello), (error) => error.code === 'FS_NOT_DIRECTORY' && /not a directory/.test(error.message))
+
+    // --- watch: polling replaces the SFTP change feed ----------------------
+    const watchPath = path.join(mount.anchor, scratchWatch)
+    const watchTarget = await fs.resolve(watchPath)
+    await fs.writeText(watchTarget, 'watching\n')
+    let fired = 0
+    const abort = new AbortController()
+    const close = await fs.watch(watchTarget, () => {
+      fired += 1
+    }, abort.signal)
+    try {
+      const base = await fs.stat(watchTarget)
+      await fs.writeText(watchTarget, 'watching changes\n', { kind: 'replaceIfVersion', version: base.version })
+      const deadline = Date.now() + 5000
+      while (fired === 0 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+      assert.ok(fired > 0, 'watch() reports the remote change')
+      // closing is asynchronous and idempotent
+      await close()
+      await close()
+      const settled = fired
+      await fs.writeText(watchTarget, 'after close\n')
+      await new Promise((resolve) => setTimeout(resolve, 700))
+      assert.equal(fired, settled, 'no callbacks after close()')
+    } finally {
+      abort.abort()
+      await close()
+    }
 
     // --- writes: create / update / intent guards ---------------------------
     const createdTarget = await fs.resolve(path.join(mount.anchor, scratchCreated))
@@ -189,7 +220,7 @@ test('ctx.fs serves a mounted remote directory the way the local backend does', 
     assert.equal((await fs.listMounts()).length, 0)
 
     // --- remote scratch files back out ------------------------------------
-    await removeScratch(fs, scratchCreated, scratchMulti)
+    await removeScratch(fs, scratchCreated, scratchMulti, scratchWatch)
   } finally {
     await ctx.fiber.dispose()
     await rm(dir, { recursive: true, force: true })

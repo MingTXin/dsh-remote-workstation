@@ -1,6 +1,6 @@
 # dsh-remote-workstation
 
-把远程服务器目录挂进 DeepSeek Harness 侧栏工作区（阶段 2：可读写 + 远端命令/搜索工具）。
+把远程服务器目录挂进 DeepSeek Harness 侧栏工作区（阶段 3：可读写 + 自动刷新 + 远端 git + 二进制预览）。
 
 插件做三件事：
 
@@ -97,10 +97,10 @@ dsh --profile rwtest --port 43199 --no-open   # 打开它打印的 http://127.0.
 注意：
 
 - **远端可写**（0.3.0 起，`remoteReadOnly` 默认 `false`）：`write`/`edit` 工具经同一个 `ctx.fs` 契约落到远端——`createIfAbsent`、按版本令牌的 `replaceIfVersion`（版本过期报 `FS_STALE_VERSION`）、字面量 `editText`（多处命中未 `replaceAll` 报 `FS_AMBIGUOUS_EDIT`）；沙箱围栏照旧（`read-only` 拒、`workspace-write` 限锚点子树 + `/tmp`、`danger-full-access` 放行）。想维持只读就把 `remoteReadOnly` 设回 `true`。
-- Files 标签的**自动刷新**不可用（`watch` 在远程不可用，会返回 `workspace-file/watch-unsupported`）。手动刷新方式：收起再展开该目录，或重新打开文件。
+- Files 标签的**自动刷新**（0.4.0 起）：远端 `watch` 用「轮询文件属性」实现——每 `watchIntervalMs`（默认 2000ms，最小 250）对被监视路径做一次 `stat`，版本令牌（dev/ino/size/mtime/ctime）变化就通知上层，`workspace-file/watch-unsupported` 不再出现；代价是变化最多延迟一个轮询周期，且每个被监视路径每周期一次 `stat`（不是整目录遍历）。不想要轮询可把 `watchIntervalMs` 调大。
 - `@` 文件提及、回合 diff（git）仍走宿主本地路径，不会看到远端内容；这是上游按设计保留的边界（`docs/subsystems/ssh.md`："Web workspace views that assume host filesystem access need separate integration"）。
 - 远端连接超时默认 15s，可在 loader 行 config 里调 `connectTimeoutMs`。
-- **锚点工作区里的会话，cwd 是本地空锚点目录**：读文件/读写/列目录/Files 标签走 `ctx.fs`（到远端），但 `bash`/`terminal` 工具与内置 `glob`/`grep` 仍在本地执行（ripgrep 跑在宿主、锚点目录是空的）。0.3.0 起插件自带两个工具：`remote_exec`（在远端跑命令，返回 exitCode/stdout/stderr/durationMs，可带 `cwd`）与 `remote_search`（远端递归 `grep -rInE`，返回 `path:line: text`），无需再依赖 dsh-ssh。
+- **锚点工作区里的会话，cwd 是本地空锚点目录**：读文件/读写/列目录/Files 标签走 `ctx.fs`（到远端），但 `bash`/`terminal` 工具与内置 `glob`/`grep` 仍在本地执行（ripgrep 跑在宿主、锚点目录是空的）。0.4.0 起插件自带三个工具：`remote_exec`（在远端跑命令，返回 exitCode/stdout/stderr/durationMs，可带 `cwd`）、`remote_search`（远端递归 `grep -rInE`，返回 `path:line: text`）与 `remote_git`（在远端仓库里跑只读 git 查询：status/diff/log/show/branch/rev-parse/ls-files/blame/stash），无需再依赖 dsh-ssh。
 - **凭据存储**：`~/.dsh/remote-workspaces.json`（挂载表）只存 `alias/host/port/user`；凭据来源有两处——本插件自己的 `~/.dsh/remote-workspaces-hosts.json`（面板里添加的主机，明文、0600），以及 `~/.dsh/dsh-ssh.json`（dsh-ssh 的主机表，现读）。两者都没有该主机时不会静默退化成 agent 鉴权，而是直接报
   `remote workspace: no credentials for host "<alias>" — add a password or a private key for it in the DSH SSH host store (~/.dsh/dsh-ssh.json, 侧栏「远程」→ 主机列表来自该文件)`
   （旧版会报 `All configured authentication methods failed`）。
@@ -128,7 +128,13 @@ dsh --profile rwtest --port 43199 --no-open   # 打开它打印的 http://127.0.
 | 自有主机存储（0.2.0） | `hostSave` → `{alias:'verify-box',host:'192.0.2.9',port:2200,user:'dev',source:'plugin'}`；`hosts` 同时列出插件主机与 dsh-ssh 主机（带 `source` 字段），`hostRemove` 删除插件主机 |
 | 自有主机优先 | 同名 alias 在插件存储里覆盖 `dsh-ssh.json` 的连接参数与凭据 |
 | `hostTest` 错误面 | 不可达主机 → 400 `cannot connect to "verify-box" (dev@192.0.2.9:2200): connection timed out after 15000 ms` |
-| 单元测试 | `node --test` 21 例（离线默认 18 通过 + 3 例 SSH 集成用例自动跳过；设 `DSH_RW_REMOTE_HOST` 可全跑） |
+| 远端写入（0.3.0） | `createIfAbsent` 新建 / 再次 `createIfAbsent` → `FS_NOT_OBSERVED`；`replaceIfVersion` 成功、旧版本 → `FS_STALE_VERSION`；`editText` 成功、缺失 → `FS_EDIT_NOT_FOUND`、多处命中未 `replaceAll` → `FS_AMBIGUOUS_EDIT` |
+| `remote_exec`（0.3.0） | `uname -srm && cat hello.txt` → `exitCode 0`、`Linux 5.10.0-… aarch64`、290ms |
+| `remote_search`（0.3.0） | `pattern:"second line"` → `./hello.txt:2:second line`；`glob:"*.md"` → `./sub/notes.md:1:# notes` |
+| 远端 `watch`（0.4.0） | 真实 SSH：改文件内容后 5s 内收到回调；`close()` 幂等、close 后 700ms 内无回调 |
+| `remote_git`（0.4.0） | `status --short` → `exitCode 0`、` M app.txt`、288ms；`diff --stat` → ` app.txt \| 1 +`；`push` → 400 白名单拒绝 |
+| 二进制/图片预览（0.4.0） | `workspaceFiles/readBytes`（multipart）返回远端 70 字节 PNG（magic `89504e47`），metadata `version:"0:0:70:…"`、`eof:true` |
+| 单元测试 | `node --test` 23 例（离线默认 19 通过 + 4 例 SSH 集成用例自动跳过；设 `DSH_RW_REMOTE_HOST` 可全跑） |
 | 客户端 bundle 服务端可解析 | `plugins/??dsh-remote-workstation/client.js&rev=…` → 200、20 KB、`new vm.Script()` 通过 |
 
 
@@ -146,7 +152,8 @@ dsh --profile rwtest --port 43199 --no-open   # 打开它打印的 http://127.0.
         hostsPath: ~/.dsh/remote-workspaces-hosts.json  # 插件自有主机表（面板「主机」区维护，含明文凭据、0600）
         anchorRoot: ~/.dsh/remote-workspaces       # 锚点目录根
         remoteReadOnly: false                      # true = 拒绝一切远端写入
-        enableTools: true                          # 注册 remote_exec / remote_search
+        enableTools: true                          # 注册 remote_exec / remote_search / remote_git
+        watchIntervalMs: 2000                      # 远端 watch 轮询间隔（最小 250）
         connectTimeoutMs: 15000
         maxReadTextBytes: 33554432                 # 单次 readText 上限 32 MiB
         # 也可以静态声明挂载（不落盘）：
@@ -160,5 +167,5 @@ dsh --profile rwtest --port 43199 --no-open   # 打开它打印的 http://127.0.
 ## 限制与后续阶段
 
 - 阶段 2（0.3.0 已实现）：`writeText` / `editText`（SFTP 写入 + mtime/size 版本令牌 + 原子替换语义）、`remote_exec` 与 `remote_search` 工具（内置 `glob`/`grep` 走宿主 ripgrep 二进制，不经过 `ctx.fs`，因此远端目录要用插件工具）。
-- 阶段 3：watch 轮询、git 集成、图片/二进制预览。
-- 已知边界：远端无 `watch`；SFTP 的 mtime 精度为秒；`processPath()` 返回锚点宿主路径（因此「在文件管理器中打开」可用）。
+- 阶段 3（0.4.0 已实现）：远端 `watch` 轮询（`watchIntervalMs`，默认 2000ms，最小 250）、`remote_git` 工具与 `/api/remote-workspace/git` 动作（只读子命令白名单）、图片/二进制预览（`readBytes`/`readByteRange` 走真实 SFTP，PNG 字节端到端验证通过）。
+- 已知边界：远端刷新是轮询不是推送；SFTP 的 mtime 精度为秒（同秒内等长等 mtime 的重写无法区分）；`@` 提及与回合 diff 仍走宿主路径（上游边界），要看远端仓库请用 `remote_git`；`processPath()` 返回锚点宿主路径（因此「在文件管理器中打开」可用）。

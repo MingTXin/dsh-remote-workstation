@@ -8,4 +8,5 @@
         hostsPath: ~/.dsh/remote-workspaces-hosts.json
         sshHostsPath: ~/.dsh/dsh-ssh.json
         remoteReadOnly: false
+        watchIntervalMs: 2000
         connectTimeoutMs: 15000
