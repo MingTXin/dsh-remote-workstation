@@ -1,0 +1,22 @@
+name: checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  syntax-and-pack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Syntax check the plugin sources
+        run: |
+          for file in $(git ls-files 'lib/*.js' 'lib/**/*.js' 'scripts/*.mjs' 'test/*.mjs'); do
+            node --check "$file"
+          done
+      - name: Verify the published file set
+        run: npm pack --dry-run
