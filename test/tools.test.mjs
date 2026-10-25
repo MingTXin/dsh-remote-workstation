@@ -9,6 +9,10 @@ import { createRemoteTools } from '../lib/tools.js'
 test('remote tools forward to the engine', async () => {
   const calls = []
   const tools = createRemoteTools({
+    authorize: async (request) => {
+      calls.push({ kind: 'authorize', request })
+      return { mode: 'danger-full-access' }
+    },
     exec: async (host, command, options) => {
       calls.push({ kind: 'exec', host, command, options })
       return { exitCode: 0, stdout: 'built ok\n', stderr: '', durationMs: 12 }
@@ -28,17 +32,22 @@ test('remote tools forward to the engine', async () => {
   const signal = new AbortController().signal
   const execResult = await execTool.execute({ host: 'box', command: 'make', cwd: '/srv/app', timeoutMs: 5000 }, { signal })
   assert.equal(execResult.stdout, 'built ok\n')
-  assert.equal(calls[0].kind, 'exec')
-  assert.equal(calls[0].host, 'box')
-  assert.equal(calls[0].options.cwd, '/srv/app')
-  assert.equal(calls[0].options.timeoutMs, 5000)
-  assert.equal(calls[0].options.signal, signal)
+  assert.equal(calls[0].kind, 'authorize')
+  assert.equal(calls[0].request.toolName, 'remote_exec')
+  assert.equal(calls[0].request.kind, 'mutate')
+  assert.equal(calls[0].request.host, 'box')
+  assert.equal(calls[1].kind, 'exec')
+  assert.equal(calls[1].host, 'box')
+  assert.equal(calls[1].options.cwd, '/srv/app')
+  assert.equal(calls[1].options.timeoutMs, 5000)
+  assert.equal(calls[1].options.signal, signal)
 
   const searchResult = await searchTool.execute({ host: 'box', path: '/srv/app', pattern: 'hit', glob: '*.ts' }, { signal })
   assert.equal(searchResult.count, 1)
   assert.deepEqual(searchResult.matches, ['a.ts:2: hit'])
-  assert.equal(calls[1].request.pattern, 'hit')
-  assert.equal(calls[1].request.glob, '*.ts')
+  assert.equal(calls[2].kind, 'search')
+  assert.equal(calls[2].request.pattern, 'hit')
+  assert.equal(calls[2].request.glob, '*.ts')
 
   const rendered = execTool.output.render({}, execResult)
   assert.equal(rendered[0].type, 'text')
@@ -46,10 +55,53 @@ test('remote tools forward to the engine', async () => {
 
   const gitResult = await gitTool.execute({ host: 'box', path: '/srv/app', command: 'status', args: ['--short'] }, { signal })
   assert.equal(gitResult.stdout, 'M src/app.ts\n')
-  assert.equal(calls[2].kind, 'git')
-  assert.equal(calls[2].request.path, '/srv/app')
-  assert.equal(calls[2].request.command, 'status')
-  assert.deepEqual(calls[2].request.args, ['--short'])
-  assert.equal(calls[2].request.signal, signal)
+  assert.equal(calls[3].kind, 'authorize')
+  assert.equal(calls[3].request.toolName, 'remote_git')
+  assert.equal(calls[3].request.kind, 'read')
+  assert.equal(calls[4].kind, 'git')
+  assert.equal(calls[4].request.path, '/srv/app')
+  assert.equal(calls[4].request.command, 'status')
+  assert.deepEqual(calls[4].request.args, ['--short'])
+  assert.equal(calls[4].request.signal, signal)
   assert.match(gitTool.output.render({}, gitResult)[0].text, /git status in \/srv\/app/)
+})
+
+test('a denied authorization stops the tool before it runs', async () => {
+  const ran = []
+  const tools = createRemoteTools({
+    authorize: async () => {
+      throw new Error('blocked by test')
+    },
+    exec: async () => {
+      ran.push('exec')
+      return { exitCode: 0, stdout: '', stderr: '', durationMs: 1 }
+    },
+    search: async () => ({ count: 0, truncated: false, exitCode: 1, matches: [] }),
+    git: async () => {
+      ran.push('git')
+      return { command: 'git stash', path: '/srv/app', exitCode: 0, stdout: '', stderr: '', durationMs: 1 }
+    },
+  })
+  const signal = new AbortController().signal
+  await assert.rejects(tools[0].execute({ host: 'box', command: 'rm -rf /srv/app' }, { signal }), /blocked by test/)
+  await assert.rejects(tools[2].execute({ host: 'box', path: '/srv/app', command: 'stash' }, { signal }), /blocked by test/)
+  assert.deepEqual(ran, [])
+})
+
+test('remote_git marks stash as a mutation and status as a read', async () => {
+  const kinds = []
+  const tools = createRemoteTools({
+    authorize: async (request) => {
+      kinds.push(request.kind)
+      return { mode: 'danger-full-access' }
+    },
+    exec: async () => ({ exitCode: 0, stdout: '', stderr: '', durationMs: 1 }),
+    search: async () => ({ count: 0, truncated: false, exitCode: 1, matches: [] }),
+    git: async (request) => ({ command: `git ${request.command}`, path: request.path, exitCode: 0, stdout: '', stderr: '', durationMs: 1 }),
+  })
+  const gitTool = tools[2]
+  const signal = new AbortController().signal
+  await gitTool.execute({ host: 'box', path: '/srv/app', command: 'status' }, { signal })
+  await gitTool.execute({ host: 'box', path: '/srv/app', command: 'stash' }, { signal })
+  assert.deepEqual(kinds, ['read', 'mutate'])
 })

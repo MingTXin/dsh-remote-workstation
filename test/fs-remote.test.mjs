@@ -259,6 +259,58 @@ test('remoteReadOnly: true still fences every remote mutation', { skip }, async 
   }
 })
 
+test('workspace-write confines remote writes to the workspace root', { skip }, async () => {
+  // The anchor has to live outside the OS temp area, because workspace-write
+  // also allows temp writes; production anchors live under ~/.dsh.
+  const dir = await mkdtemp(path.join(os.homedir(), '.dsh', 'rw-remote-ww-'))
+  const scratch = `scratch-ww-${process.pid}-${Date.now()}.txt`
+  const ctx = new Context()
+  ctx.reflect.provide('sandboxPolicy', {
+    defaultMode: 'workspace-write',
+    resolve: () => ({ mode: 'workspace-write', writableRoots: [dir] }),
+  })
+  try {
+    await ctx.plugin(RemoteWorkspaceFileSystem, {
+      storePath: path.join(dir, 'store.json'),
+      sshHostsPath: SSH_STORE,
+      anchorRoot: path.join(dir, 'anchors'),
+      connectTimeoutMs: 20000,
+    })
+    const fs = ctx.fs
+    const mount = await fs.addMount(HOST, REMOTE)
+    const target = await fs.resolve(path.join(mount.anchor, scratch))
+
+    // inside the workspace root: allowed
+    const written = await fs.writeText(target, 'inside\n', undefined, undefined, {
+      mode: 'workspace-write',
+      workspaceRoot: mount.anchor,
+    })
+    assert.equal(written.operation, 'create')
+
+    // a policy whose workspace root does not contain the anchor: denied
+    await assert.rejects(
+      fs.writeText(target, 'outside\n', undefined, undefined, {
+        mode: 'workspace-write',
+        workspaceRoot: path.join(dir, 'somewhere-else'),
+      }),
+      (error) => error.code === 'FS_SANDBOX_DENIED' && /file access denied under workspace-write mode/.test(error.message),
+    )
+
+    // read-only: denied
+    await assert.rejects(
+      fs.editText(target, { oldString: 'inside', newString: 'outside' }, undefined, undefined, {
+        mode: 'read-only',
+      }),
+      (error) => error.code === 'FS_SANDBOX_DENIED' && /file access denied under read-only mode/.test(error.message),
+    )
+
+    await removeScratch(fs, scratch)
+  } finally {
+    await ctx.fiber.dispose()
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('the remote fixture is intact', { skip }, async () => {
   assert.ok(SSH_STORE, 'dsh-ssh store')
   const raw = await readFile(SSH_STORE, 'utf8')

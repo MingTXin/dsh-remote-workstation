@@ -1,7 +1,7 @@
 {
   "name": "dsh-remote-workstation",
-  "version": "0.4.1",
-  "description": "Mount remote SSH/SFTP servers as DeepSeek Harness workspaces: browse, read, write and edit remote files from the DSH sidebar, with polling watch, remote_git, remote_exec and remote_search.",
+  "version": "0.5.0",
+  "description": "Mount remote SSH/SFTP servers as DeepSeek Harness workspaces: browse, read, write and edit remote files from the DSH sidebar, run remote commands, and stay inside your sandbox and approval preset.",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",
@@ -46,7 +46,7 @@
     "node": "^22.19.0 || >=24.0.0"
   },
   "scripts": {
-    "test": "node --test --test-force-exit test/paths.test.mjs test/mounts.test.mjs test/explorer.test.mjs test/tools.test.mjs test/fs-remote.test.mjs",
+    "test": "node --test --test-force-exit test/paths.test.mjs test/mounts.test.mjs test/explorer.test.mjs test/tools.test.mjs test/permissions.test.mjs test/permissions-live.test.mjs test/fs-remote.test.mjs",
     "probe": "node scripts/probe.mjs"
   },
   "dependencies": {
@@ -59,7 +59,8 @@
     "@deepseek-ai/dsh-fs-sandbox": "*",
     "@deepseek-ai/schemastery": "*",
     "react": "^18.2.0",
-    "@deepseek-ai/dsh-tools": "^0.2.1-rc.2"
+    "@deepseek-ai/dsh-tools": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-sandbox": "*"
   },
   "dsh": {
     "engines": {

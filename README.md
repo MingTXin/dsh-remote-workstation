@@ -56,6 +56,8 @@ select a folder, and let the agent work there.
   `branch`, `rev-parse`, `ls-files`, `blame`, `stash`) inside a remote repository.
 - **Binary and image previews** — `readByteRange`/`readBytes` are real SFTP reads, so the built-in
   image/PDF/Excel/Office previews render remote files without downloading them first.
+- **Honours your permission preset** — the sandbox mode and approval policy of the calling session
+  gate remote writes and remote commands; auto review judges them like any other tool.
 
 ## Requirements
 
@@ -184,6 +186,40 @@ remote_git(host="my-server", path="/srv/app", command="diff", args=["--stat"])
 
 Both tools take the same host alias the panel uses, so a mounted workspace and a remote shell share
 one host store and one connection pool.
+
+## Permissions and approvals
+
+A remote workspace follows the same permission model as a local one: the session's preset decides the
+sandbox mode and the approval policy, and every path below reads the *live* policy of the calling
+session — switching the preset mid-session changes the behaviour immediately.
+
+| Session mode | Remote reads (`read`, `Files` tab, `remote_search`, read-only git) | Remote writes (`write` / `edit` tools) | Remote commands (`remote_exec`, `git stash`) |
+| --- | --- | --- | --- |
+| `danger-full-access` (完全权限 / 自动审查 runs on top of it) | allowed | allowed | allowed, no prompt |
+| `workspace-write` (default) | allowed | only inside the anchor subtree (plus `/tmp` and the host temp directory) | refused, unless the call escalates to `danger-full-access` with a justification |
+| `read-only` | allowed | refused (`FS_SANDBOX_DENIED`) | refused, same escalation path |
+
+How a refusal behaves depends on the approval policy the preset bundles: `ask` shows the standard DSH
+approval prompt with the justification (`允许本次操作使用 danger-full-access 权限：…`), while `never`
+fails closed with `the user rejected escalating this command to "danger-full-access"; it stays denied`.
+
+`workspace-write` is not an escalation target for remote commands: no host-side sandbox can confine a
+process that runs on another machine, so the only meaningful escalation is `danger-full-access` — which
+is exactly the prompt DSH shows before running anything wider than the session's standing mode.
+
+**Auto review** (自动审查, preset `auto`) needs no special support: it hooks `tools/pre-execute` for
+whatever tools the session has, so `remote_exec` / `remote_git` are classified by the same reviewer that
+judges `bash` — a low-risk read is allowed, an unknown or broad write is denied or escalated to you.
+
+```python
+# workspace-write session, first attempt (refused):
+remote_exec(host="my-server", command="npm test")            # -> "blocked: … cannot be confined"
+
+# the model retries once, with a reason (prompts you):
+remote_exec(host="my-server", command="npm test",
+            sandbox_permissions="danger-full-access",
+            justification="run the project's test suite on the server")
+```
 
 ## Security notes
 

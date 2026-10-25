@@ -108,6 +108,22 @@ dsh --profile rwtest --port 43199 --no-open   # 打开它打印的 http://127.0.
 - **v0.1.1 已知回归修复**：0.1.0 曾接管 `sidebar.workspaces.directoryFlow`，在 Windows 桌面会导致内置 browse 目录选择器注册失败、整页 `Renderer boot failed for 1 plugin(s)`。0.1.1 移除了该注册，仅保留「远程」面板；如仍看到该报错，请确认 `lib/client.js` 里不再含 `directoryFlow`，并彻底退出重开 DSH Desktop。
 - **主机凭据改动后**：不用重启，插件在下一次连接时现读 `~/.dsh/dsh-ssh.json`；挂载表文件被外部改动也会自动重载。
 
+## 权限与审批（0.5.0）
+
+远程工作区沿用 DSH 自己的权限模型：会话的**预设**（完全权限 / workspace-write / 只读 / 自动审查）决定 sandbox 模式与 approval 策略，插件在每次调用时读取**当前**策略——会话中途切换预设立即生效。
+
+| 会话模式 | 远端读（`read`、Files 标签、`remote_search`、只读 git） | 远端写（`write`/`edit`） | 远端命令（`remote_exec`、`git stash`） |
+| --- | --- | --- | --- |
+| `danger-full-access`（完全权限；自动审查跑在它之上） | 允许 | 允许 | 允许，无提示 |
+| `workspace-write`（默认） | 允许 | 仅锚点子树内（外加 `/tmp` 与宿主临时目录） | 拒绝；需带 `sandbox_permissions: "danger-full-access"` + 一句 `justification` 升级 |
+| `read-only` | 允许 | 拒绝（`FS_SANDBOX_DENIED`） | 同上，走升级审批 |
+
+拒绝的表现取决于预设自带的 approval 策略：`ask` 会弹出 DSH 标准审批框（`允许本次操作使用 danger-full-access 权限：…`），`never` 直接失败关闭（`the user rejected escalating this command to "danger-full-access"; it stays denied`）。
+
+`workspace-write` 不作为远端命令的升级目标——宿主侧没有任何沙箱能约束跑在另一台机器上的进程，唯一有意义的目标是 `danger-full-access`，也正是 DSH 会向你确认的那一步。
+
+**自动审查**（预设 `auto`，= `danger-full-access` + `ask`）无需插件适配：它挂在 `tools/pre-execute` 上，对会话里所有工具一视同仁，`remote_exec` / `remote_git` 与 `bash` 由同一个 reviewer 判风险——低风险放行、未知或大范围改动拒绝或升级给你。
+
 ## 验收记录（2026-10-24，真实 DSH 宿主）
 
 隔离宿主：复制 web profile 到 `~/.dsh/profiles/rwtest`（`node_modules` 用 junction 指向 web），`dsh --profile rwtest --port 43199 --no-open` 启动。
@@ -134,7 +150,7 @@ dsh --profile rwtest --port 43199 --no-open   # 打开它打印的 http://127.0.
 | 远端 `watch`（0.4.0） | 真实 SSH：改文件内容后 5s 内收到回调；`close()` 幂等、close 后 700ms 内无回调 |
 | `remote_git`（0.4.0） | `status --short` → `exitCode 0`、` M app.txt`、288ms；`diff --stat` → ` app.txt \| 1 +`；`push` → 400 白名单拒绝 |
 | 二进制/图片预览（0.4.0） | `workspaceFiles/readBytes`（multipart）返回远端 70 字节 PNG（magic `89504e47`），metadata `version:"0:0:70:…"`、`eof:true` |
-| 单元测试 | `node --test` 23 例（离线默认 19 通过 + 4 例 SSH 集成用例自动跳过；设 `DSH_RW_REMOTE_HOST` 可全跑） |
+| 单元测试 | `node --test` 41 例（离线默认 34 通过 + 7 例 SSH 集成用例自动跳过；设 `DSH_RW_REMOTE_HOST` 可全跑） |
 | 客户端 bundle 服务端可解析 | `plugins/??dsh-remote-workstation/client.js&rev=…` → 200、20 KB、`new vm.Script()` 通过 |
 
 
