@@ -214,6 +214,19 @@ one host store and one connection pool.
 - SFTP `mtime` has one-second resolution; the version token combines device, inode, size and mtime,
   so a rewrite that keeps size and mtime within the same second is not distinguishable.
 
+## Troubleshooting
+
+- **The desktop app exits while adding a remote directory (fixed in 0.4.1)** — ssh2 reports a
+  handshake timeout as an `error` event on the connection, and an EventEmitter without an `error`
+  listener throws. Inside the DSH host process that surfaced as
+  `fatal uncaught exception: Error: Timed out while waiting for handshake` followed by
+  `DSH Host exited (1)`. The pool now keeps a permanent `error` guard on every connection, disables
+  ssh2's own handshake timer, and rejects the caller with
+  `cannot connect to "<alias>" (<user>@<host>:<port>): connection timed out after <n> ms` instead.
+  `npm test` covers it in `test/pool-errors.test.mjs`.
+- **"All configured authentication methods failed"** — the host entry has no usable credential.
+  Open the 远程 panel → 主机 → 编辑 and set a password or a private key (or rely on ssh-agent).
+
 ## Roadmap
 
 - ~~**Stage 2** — remote `writeText` / `editText` with version checks, `remote_search`, remote shells

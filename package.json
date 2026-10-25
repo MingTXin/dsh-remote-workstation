@@ -1,7 +1,7 @@
 {
   "name": "dsh-remote-workstation",
-  "version": "0.4.0",
-  "description": "Mount remote SSH/SFTP directories into DeepSeek Harness workspaces: anchor workspaces, a read/write remote filesystem provider for ctx.fs with polling watch, and a Remote Explorer sidebar panel",
+  "version": "0.4.1",
+  "description": "Mount remote SSH/SFTP servers as DeepSeek Harness workspaces: browse, read, write and edit remote files from the DSH sidebar, with polling watch, remote_git, remote_exec and remote_search.",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",

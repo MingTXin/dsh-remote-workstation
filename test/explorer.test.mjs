@@ -112,7 +112,7 @@ test('the explorer API browses and mounts a remote directory', { skip }, async (
     assert.ok(names.includes('hello.txt'), `fixture listing contains hello.txt: ${names.join(',')}`)
     assert.equal(listed.body.value.entries[0].type, 'directory', 'directories sort first')
 
-    const read = await request(routes, 'read', { path: `${FIXTURE}/hello.txt` })
+    const read = await request(routes, 'read', { host: HOST, path: `${FIXTURE}/hello.txt` })
     assert.equal(read.body.ok, true, read.body.error?.message)
     assert.equal(read.body.value.bytes, 39)
     assert.match(read.body.value.head, /^hello from the remote host/)
@@ -144,3 +144,4 @@ test('the explorer API browses and mounts a remote directory', { skip }, async (
     rmSync(storeDir, { recursive: true, force: true })
   }
 })
+

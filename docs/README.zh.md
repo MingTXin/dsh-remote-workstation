@@ -164,6 +164,15 @@ dsh --profile rwtest --port 43199 --no-open   # 打开它打印的 http://127.0.
 
 必须把 `fs-sandbox` 这一行禁用：`ctx.fs` 服务一个组合只能有一个提供方（`dsh-base/README.zh.md`），本插件的提供方已经继承了它的沙箱围栏。
 
+## 故障排查
+
+- **桌面端添加远程目录时闪退（0.4.1 已修复）**：ssh2 把握手超时报成连接对象上的 `error` 事件，而没有任何 `error` 监听者的 EventEmitter 会直接抛出。在 DSH 宿主进程里表现为
+  `fatal uncaught exception: Error: Timed out while waiting for handshake` + `DSH Host exited (1)`（2026-10-25 日志里两次崩溃都是这一条）。
+  现在连接池在 `connect()` 之前就永久挂上 `error`/`close` 监听、关掉 ssh2 自带的握手定时器（`readyTimeout: 0`）、SFTP 会话也加了 `error` 监听，超时只让调用方收到
+  `cannot connect to "<alias>" (<user>@<host>:<port>): connection timed out after <n> ms`。回归用例见 `test/pool-errors.test.mjs`。
+  用旧代码复现的原始输出：`Unhandled 'error' event: Error: Timed out while waiting for handshake { level: 'client-timeout' }` → 进程直接退出。
+- **"All configured authentication methods failed"**：该主机没有可用的凭据。打开「远程」面板 → 主机 → 编辑，填密码或私钥路径（也可以用 ssh-agent）。
+
 ## 限制与后续阶段
 
 - 阶段 2（0.3.0 已实现）：`writeText` / `editText`（SFTP 写入 + mtime/size 版本令牌 + 原子替换语义）、`remote_exec` 与 `remote_search` 工具（内置 `glob`/`grep` 走宿主 ripgrep 二进制，不经过 `ctx.fs`，因此远端目录要用插件工具）。
