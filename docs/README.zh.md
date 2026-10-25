@@ -124,6 +124,23 @@ dsh --profile rwtest --port 43199 --no-open   # 打开它打印的 http://127.0.
 
 **自动审查**（预设 `auto`，= `danger-full-access` + `ask`）无需插件适配：它挂在 `tools/pre-execute` 上，对会话里所有工具一视同仁，`remote_exec` / `remote_git` 与 `bash` 由同一个 reviewer 判风险——低风险放行、未知或大范围改动拒绝或升级给你。
 
+## 远端 shell（0.6.0，可选）
+
+上面所有能力都是"把文件操作送到服务器"。agent 用的 shell（POSIX 上是 `bash`、Windows 上是 `pwsh`）仍在宿主跑，所以在锚点会话里执行 `npm test` 只会在本地空锚点目录里跑。**远端 shell 路由**把这类命令也搬到服务器：同一个会话、同一个工作区、同一套审批，只要命令的 `cwd` 在锚点内，就发到 SSH 主机上执行。
+
+启用方式：把 [`examples/cordis.remote-shell.yml`](../examples/cordis.remote-shell.yml) 里的两行粘到 profile 的 `cordis.patch.yml`（桌面版：`%USERPROFILE%\.dsh\profiles\web\cordis.patch.yml`）。这两行**原地改写**已有的 `bash-sandbox` / `pwsh-sandbox` 加载行：
+
+| 方面 | 启用后的行为 |
+| --- | --- |
+| `cwd` 在锚点内的命令 | 经 SSH exec 通道流式执行；stdout/stderr、退出码、超时、后台任务与本地一致（宿主启动一个小 helper 进程把通道接到自己的管道上） |
+| `cwd` 在锚点外的命令 | 完全保持本地行为，包括原有沙箱 |
+| shell 方言 | 命令串由**远端** POSIX shell 解释（宿主是 Windows 也一样） |
+| 约束 | 跑在另一台机器上的进程无法被宿主沙箱约束 ⇒ 只有调用本身的 sandbox 模式是 `danger-full-access` 时才执行；否则报错并提示模型申请升级（走正常审批弹窗） |
+| `terminal`（交互 PTY）、内置 `glob`/`grep`、LSP、`@` 提及、回合 diff | 仍然在宿主本地（远端请用 `remote_search` / `remote_exec`） |
+
+为什么不默认开启：Windows 桌面版的 launcher 会把 `pwsh-sandbox` 行替换成它自己的 ACL 沙箱执行器，原地改写会绕过那层 ACL 约束。所以这是显式取舍：agent 获得真正的远端 shell，远端命令改用审批模型把关，而不是宿主沙箱。
+
+
 ## 验收记录（2026-10-24，真实 DSH 宿主）
 
 隔离宿主：复制 web profile 到 `~/.dsh/profiles/rwtest`（`node_modules` 用 junction 指向 web），`dsh --profile rwtest --port 43199 --no-open` 启动。
@@ -193,4 +210,5 @@ dsh --profile rwtest --port 43199 --no-open   # 打开它打印的 http://127.0.
 
 - 阶段 2（0.3.0 已实现）：`writeText` / `editText`（SFTP 写入 + mtime/size 版本令牌 + 原子替换语义）、`remote_exec` 与 `remote_search` 工具（内置 `glob`/`grep` 走宿主 ripgrep 二进制，不经过 `ctx.fs`，因此远端目录要用插件工具）。
 - 阶段 3（0.4.0 已实现）：远端 `watch` 轮询（`watchIntervalMs`，默认 2000ms，最小 250）、`remote_git` 工具与 `/api/remote-workspace/git` 动作（只读子命令白名单）、图片/二进制预览（`readBytes`/`readByteRange` 走真实 SFTP，PNG 字节端到端验证通过）。
-- 已知边界：远端刷新是轮询不是推送；SFTP 的 mtime 精度为秒（同秒内等长等 mtime 的重写无法区分）；`@` 提及与回合 diff 仍走宿主路径（上游边界），要看远端仓库请用 `remote_git`；`processPath()` 返回锚点宿主路径（因此「在文件管理器中打开」可用）。
+- 远端 shell 路由（0.6.0，可选）：`examples/cordis.remote-shell.yml` 原地改写 `bash-sandbox` / `pwsh-sandbox` 行，锚点内的 `bash`/`pwsh` 命令改在服务器执行；仅 `danger-full-access` 放行远端命令。`test/shell-remote.test.mjs` 覆盖路由、围栏与真实 `ctx.shell` 执行（4 例）。
+- 已知边界：远端刷新是轮询不是推送；SFTP 的 mtime 精度为秒（同秒内等长等 mtime 的重写无法区分）；`@` 提及与回合 diff 仍走宿主路径（上游边界），要看远端仓库请用 `remote_git`；`processPath()` 返回锚点宿主路径（因此「在文件管理器中打开」可用）；远端 shell 只覆盖 `bash`/`pwsh`，交互式 `terminal`、内置 `glob`/`grep`、LSP 仍在宿主本地，且远端命令绕过了宿主沙箱（因此要求 `danger-full-access`）。

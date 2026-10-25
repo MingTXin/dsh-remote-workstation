@@ -1,0 +1,30 @@
+# Optional: run the agent's shell commands on the SSH host.
+#
+# Append these rows to your profile's cordis.patch.yml (for the desktop app:
+# %USERPROFILE%\.dsh\profiles\web\cordis.patch.yml) when you want commands whose
+# workdir sits inside a mount anchor to execute on the server instead of locally.
+#
+# Read the "Remote shell" section of the README first:
+#  - the stock shell row is *rewritten in place*, so the shell service keeps a
+#    single provider and local commands keep working;
+#  - remote commands cannot be confined by the host sandbox, so they only run
+#    when the session's sandbox mode is danger-full-access (the model is told to
+#    ask for an escalation otherwise, which goes through the normal approval UI);
+#  - in the Windows desktop app this replaces the desktop ACL pwsh executor,
+#    which is why it is not part of the default patch.
+- id: bash-sandbox
+  name: dsh-remote-workstation/shell
+  disabled: !!js process.platform === 'win32'
+  config:
+    storePath: ~/.dsh/remote-workspaces.json
+    hostsPath: ~/.dsh/remote-workspaces-hosts.json
+    sshHostsPath: ~/.dsh/dsh-ssh.json
+    connectTimeoutMs: 15000
+- id: pwsh-sandbox
+  name: dsh-remote-workstation/pwsh
+  disabled: !!js process.platform !== 'win32'
+  config:
+    storePath: ~/.dsh/remote-workspaces.json
+    hostsPath: ~/.dsh/remote-workspaces-hosts.json
+    sshHostsPath: ~/.dsh/dsh-ssh.json
+    connectTimeoutMs: 15000

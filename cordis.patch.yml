@@ -1,3 +1,5 @@
+# Runtime mounts and the ssh host store.
+# Remote shell routing is opt-in: see examples/cordis.remote-shell.yml.
 - id: fs-sandbox
   disabled: true
 - insert:

@@ -58,6 +58,9 @@ select a folder, and let the agent work there.
   image/PDF/Excel/Office previews render remote files without downloading them first.
 - **Honours your permission preset** — the sandbox mode and approval policy of the calling session
   gate remote writes and remote commands; auto review judges them like any other tool.
+- **Optional remote shell** — with one extra patch the agent's own `bash`/`pwsh` commands run on the
+  server whenever their `cwd` is inside an anchor, so builds and test suites execute where the code
+  lives (see [Remote shell](#remote-shell-optional)).
 
 ## Requirements
 
@@ -187,6 +190,43 @@ remote_git(host="my-server", path="/srv/app", command="diff", args=["--stat"])
 Both tools take the same host alias the panel uses, so a mounted workspace and a remote shell share
 one host store and one connection pool.
 
+## Remote shell (optional)
+
+Everything above routes *file operations* to the server. The shell the agent drives (`bash` on
+POSIX, `pwsh` on Windows) still runs on the host, so an anchor session that runs `npm test` builds the
+empty local anchor directory. Turning on **remote shell routing** moves those commands to the server
+too: same session, same workspace, same approval flow, but `cwd` inside an anchor means "run this on
+the SSH host".
+
+Enable it by pasting the rows from [`examples/cordis.remote-shell.yml`](examples/cordis.remote-shell.yml)
+into your profile's `cordis.patch.yml` (desktop app:
+`%USERPROFILE%\.dsh\profiles\web\cordis.patch.yml`). The rows rewrite the existing `bash-sandbox` /
+`pwsh-sandbox` loader entries *in place*:
+
+```yaml
+- id: bash-sandbox
+  name: dsh-remote-workstation/shell      # POSIX hosts
+  disabled: !!js process.platform === 'win32'
+- id: pwsh-sandbox
+  name: dsh-remote-workstation/pwsh       # Windows hosts
+  disabled: !!js process.platform !== 'win32'
+```
+
+What changes and what does not:
+
+| Aspect | Behaviour with remote shell routing |
+| --- | --- |
+| Command with `cwd` inside an anchor | streamed from the server over an SSH exec channel; stdout, stderr, exit code, timeouts and background jobs behave exactly like a local command (the host spawns a small helper that pipes the channel) |
+| Command with `cwd` outside every anchor | unchanged local execution, including the stock sandbox |
+| Shell dialect | the command string is interpreted by the *remote* POSIX shell, even when the host is Windows |
+| Confinement | a process on another machine cannot be confined by the host sandbox, so remote commands run only when the call's sandbox mode is `danger-full-access`; otherwise the command fails with an error telling the model to request an escalation (the normal approval prompt) |
+| `terminal` (interactive PTY), built-in `glob`/`grep`, LSP, `@` mentions, turn diffs | still host-local — use `remote_search` / `remote_exec` for remote work |
+
+Why it is not on by default: in the Windows desktop app the launcher replaces the `pwsh-sandbox` row
+with its own ACL-confined executor, which this rewriting would bypass. Opting in is therefore a
+deliberate trade — the agent gets a real remote shell, and remote commands stay behind the approval
+model instead of the host sandbox.
+
 ## Permissions and approvals
 
 A remote workspace follows the same permission model as a local one: the session's preset decides the
@@ -249,6 +289,9 @@ remote_exec(host="my-server", command="npm test",
   than remote files. Use `remote_search` (or `remote_exec` with `rg`/`find`) instead.
 - SFTP `mtime` has one-second resolution; the version token combines device, inode, size and mtime,
   so a rewrite that keeps size and mtime within the same second is not distinguishable.
+- Remote shell routing covers `bash`/`pwsh` only: the interactive `terminal` (PTY), built-in
+  `glob`/`grep`, LSP, `@` mentions and turn diffs stay host-local. A remote command also loses the
+  host sandbox, which is why it requires a `danger-full-access` call.
 
 ## Troubleshooting
 
@@ -269,8 +312,13 @@ remote_exec(host="my-server", command="npm test",
   for builds.~~ Shipped in 0.3.0 (`remote_exec`, `remote_search`, version-guarded writes).
 - ~~**Stage 3** — polling-based remote `watch`, git integration, image/binary previews.~~ Shipped in
   0.4.0 (`watchIntervalMs`, `remote_git`, byte-range previews).
+- **Remote shell routing** — shipped in 0.6.0 as an opt-in patch
+  ([`examples/cordis.remote-shell.yml`](examples/cordis.remote-shell.yml)): commands whose `cwd` is
+  inside an anchor run on the server.
 - Optional: consume the upstream `packages/ssh` family (`@deepseek-ai/dsh-fs-ssh`) instead of the
-  custom union provider, once web workspace views become provider-driven.
+  custom union provider, once web workspace views become provider-driven. That runtime also ships
+  `dsh-subprocess-ssh` / `dsh-sandbox-ssh`, the upstream answer to the same problem the opt-in remote
+  shell patch solves; adopting it would replace both the union provider and the shell patch.
 
 ## Development
 
